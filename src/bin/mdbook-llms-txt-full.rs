@@ -64,9 +64,31 @@ pub fn render_llm_txt_full(ctx: &RenderContext) -> anyhow::Result<String> {
         output.push_str(&format!("> {}\n\n", description));
     }
 
-    // Process chapters
-    for item in &book.sections {
-        process_book_item(item, &mut output);
+    // NEW: optional section filter
+    let only_section = ctx
+        .config
+        .get("output.llms-txt-full.only_section")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_owned());
+
+    match only_section {
+        Some(section_name) => {
+            // Only emit that one branch
+            for item in &book.sections {
+                if let BookItem::Chapter(chapter) = item {
+                    if chapter.name == section_name {
+                        process_book_item(item, &mut output);
+                        break;
+                    }
+                }
+            }
+        }
+        None => {
+            // Original behavior: dump whole book
+            for item in &book.sections {
+                process_book_item(item, &mut output);
+            }
+        }
     }
 
     Ok(output)
@@ -142,6 +164,39 @@ mod tests {
             "Check: {}",
             output
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_only_section_filter() -> Result<()> {
+        let json_str = include_str!("../../assets/test_render_contexts/simple-project.json");
+        let mut ctx: RenderContext = serde_json::from_str(json_str)?;
+
+        // Add only_section config
+        use serde_json::json;
+        ctx.config
+            .set("output.llms-txt-full.only_section", json!("第1章: サンプル"))
+            .unwrap();
+
+        let output = render_llm_txt_full(&ctx)?;
+
+        // Should contain the book title and description
+        assert!(output.contains("# サンプルブック"));
+        assert!(output.contains("> これはサンプルブックです。"));
+
+        // Should contain the first chapter's content
+        assert!(output.contains("# 第1章: サンプル"));
+        assert!(output.contains("mdbook で使用できる基本的なMarkdown記法"));
+
+        // Should contain subchapter content
+        assert!(output.contains("# 1.1 サブセクション"));
+
+        // Should NOT contain other chapters' content
+        assert!(!output.contains("# はじめに"));
+        assert!(!output.contains("mdbook のサンプルプロジェクトです"));
+        assert!(!output.contains("# 第2章: 機能紹介"));
+        assert!(!output.contains("mdbook の高度な機能"));
 
         Ok(())
     }
